@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>You2bot - Static Search Scraper</title>
+  <style>
+    body {
+      margin: 0;
+      background: #0f0f0f;
+      color: #e8e8e8;
+      font-family: monospace;
+      padding: 1rem;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+
+<script>
+const PROXY = 'https://api.codetabs.com/v1/proxy/?quest=';
+const YT_SEARCH = 'https://www.youtube.com/results?search_query=';
+
+(async function () {
+  const params = new URLSearchParams(location.search);
+  const query = params.get('s');
+
+  if (!query) {
+    return render({ error: '?s= param not found in the link. Use ?s=what you need to search for.' });
+  }
+
+  try {
+    const url = PROXY + YT_SEARCH + encodeURIComponent(query);
+    const res = await fetch(url);
+
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+
+    const html = await res.text();
+    const videos = parseYouTubeHTML(html);
+
+    render({
+      query,
+      results: videos
+    });
+
+  } catch (err) {
+    render({ error: err.message });
+  }
+})();
+
+function render(obj) {
+  document.body.textContent = JSON.stringify(obj, null, 2);
+}
+
+function parseYouTubeHTML(html) {
+  const videos = [];
+  const seen = new Set();
+
+  const dataMatch = html.match(/var ytInitialData\s*=\s*(\{.+?\});/s);
+
+  if (dataMatch) {
+    try {
+      const data = JSON.parse(dataMatch[1]);
+      const contents = walk(data, 'videoRenderer');
+
+      for (const vr of contents) {
+        const id = vr?.videoId;
+        if (!id || seen.has(id)) continue;
+
+        seen.add(id);
+
+        const title = getText(vr?.title);
+        const creator = getText(vr?.ownerText) || getText(vr?.shortBylineText);
+
+        if (title) {
+          videos.push({
+            videoId: id,
+            videoName: title,
+            videoCreator: creator || 'Unknown',
+            videoLink: 'https://www.youtube.com/watch?v=' + id
+          });
+        }
+      }
+    } catch {}
+  }
+
+  if (!videos.length) {
+    const idRe = /"videoId":"([A-Za-z0-9_-]{11})"/g;
+    const titleRe = /"title":\{"runs":\[\{"text":"([^"]+)"\}\]/g;
+    const channelRe = /"ownerText":\{"runs":\[\{"text":"([^"]+)"/g;
+
+    const ids = [...html.matchAll(idRe)].map(m => m[1]);
+    const titles = [...html.matchAll(titleRe)].map(m => m[1]);
+    const channels = [...html.matchAll(channelRe)].map(m => m[1]);
+
+    ids.forEach((id, i) => {
+      if (seen.has(id)) return;
+      seen.add(id);
+
+      videos.push({
+        videoId: id,
+        videoName: titles[i] || 'Unknown Title',
+        videoCreator: channels[i] || 'Unknown',
+        videoLink: 'https://www.youtube.com/watch?v=' + id
+      });
+    });
+  }
+
+  return videos;
+}
+
+function walk(obj, key, results = []) {
+  if (!obj || typeof obj !== 'object') return results;
+  if (key in obj) results.push(obj[key]);
+  for (const v of Object.values(obj)) walk(v, key, results);
+  return results;
+}
+
+function getText(node) {
+  if (!node) return '';
+  if (typeof node === 'string') return node;
+  if (node.simpleText) return node.simpleText;
+  if (node.runs) return node.runs.map(r => r.text).join('');
+  return '';
+}
+</script>
+
+</body>
+</html>
